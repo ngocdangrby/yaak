@@ -9,7 +9,7 @@ import type {
   Workspace,
 } from "@yaakapp-internal/models";
 import { Banner, HStack, Icon, InlineCode, SplitLayout } from "@yaakapp-internal/ui";
-import { type ComponentProps, useCallback, useMemo, useState } from "react";
+import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { modelToYaml } from "../../lib/diffYaml";
 import { trackFeatureUsage } from "../../lib/featureFeedback";
 import { resolvedModelName } from "../../lib/resolvedModelName";
@@ -28,6 +28,7 @@ import { Input } from "../core/Input";
 import { Separator } from "../core/Separator";
 import { EmptyStateText } from "../EmptyStateText";
 import { useGitCallbacks } from "./callbacks";
+import { generateCommitMessage } from "./commitMessage";
 import { handlePushResult } from "./git-util";
 
 interface Props {
@@ -49,7 +50,11 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
   const [isPushing, setIsPushing] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
   const [message, setMessage] = useState<string>("");
+  const [messageUpdateKey, setMessageUpdateKey] = useState<string>("");
   const [selectedEntry, setSelectedEntry] = useState<GitStatusEntry | null>(null);
+
+  // Stop generating messages as soon as the user writes their own
+  const messageEdited = useRef<boolean>(false);
 
   const handleCreateCommit = async () => {
     setCommitError(null);
@@ -95,6 +100,24 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
     }
     return { internalEntries: yaakEntries, externalEntries, allEntries };
   }, [status.data?.entries]);
+
+  const generatedMessage = useMemo(
+    () => generateCommitMessage(allEntries, status.data?.relaDir ?? ""),
+    [allEntries, status.data?.relaDir],
+  );
+
+  // Follow the staged changes until the user takes over the message
+  useEffect(() => {
+    if (messageEdited.current) return;
+    setMessage(generatedMessage);
+    setMessageUpdateKey(generatedMessage);
+  }, [generatedMessage]);
+
+  const handleChangeMessage = useCallback((message: string) => {
+    // An empty message hands control back to the generator
+    messageEdited.current = message.trim().length > 0;
+    setMessage(message);
+  }, []);
 
   const hasAddedAnything = allEntries.find((e) => e.staged) != null;
   const hasAnythingToAdd = allEntries.find((e) => e.status !== "current") != null;
@@ -262,7 +285,9 @@ export function GitCommitDialog({ syncDir, onDone, workspace }: Props) {
                   <Input
                     className="text-base! font-sans rounded-md"
                     placeholder="Commit message..."
-                    onChange={setMessage}
+                    defaultValue={message}
+                    forceUpdateKey={messageUpdateKey}
+                    onChange={handleChangeMessage}
                     stateKey={null}
                     label="Commit message"
                     fullHeight
