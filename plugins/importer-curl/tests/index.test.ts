@@ -178,6 +178,94 @@ describe("importer-curl", () => {
     });
   });
 
+  // Chrome's "Copy as cURL (cmd)" escapes with carets instead of backslashes:
+  // `^"` quotes an argument, `^&` is a literal ampersand, and a trailing `^`
+  // continues the line.
+  test("Imports Windows cmd caret escaping", () => {
+    expect(
+      convertCurl(
+        'curl --url ^"https://yaak.app/terminals?pageSize=200^&page=1^" ^\n  -H ^"Accept: application/json^" ^\n  -H ^"User-Agent: Mozilla/5.0 ^(Linux^) Chrome/156.0.0.0^"',
+      ),
+    ).toEqual({
+      resources: {
+        workspaces: [baseWorkspace()],
+        httpRequests: [
+          baseRequest({
+            url: "https://yaak.app/terminals",
+            urlParameters: [
+              { name: "pageSize", value: "200", enabled: true },
+              { name: "page", value: "1", enabled: true },
+            ],
+            headers: [
+              { name: "Accept", value: "application/json", enabled: true },
+              {
+                name: "User-Agent",
+                value: "Mozilla/5.0 (Linux) Chrome/156.0.0.0",
+                enabled: true,
+              },
+            ],
+          }),
+        ],
+      },
+    });
+  });
+
+  // A quote inside a cmd argument comes out as `^\^"`, which unescapes to the
+  // `\"` that shlex reads as a literal quote.
+  test("Imports a quote inside a Windows cmd argument", () => {
+    expect(
+      convertCurl(
+        'curl ^"https://yaak.app^" ^\n  -H ^"sec-ch-ua: ^\\^"Chromium^\\^";v=^\\^"156^\\^"^"',
+      ),
+    ).toEqual({
+      resources: {
+        workspaces: [baseWorkspace()],
+        httpRequests: [
+          baseRequest({
+            url: "https://yaak.app",
+            headers: [{ name: "sec-ch-ua", value: '"Chromium";v="156"', enabled: true }],
+          }),
+        ],
+      },
+    });
+  });
+
+  test("Imports a Windows cmd POST body", () => {
+    expect(
+      convertCurl(
+        'curl ^"https://yaak.app^" ^\r\n  -X ^"POST^" ^\r\n  -H ^"Content-Type: application/json^" ^\r\n  --data-raw ^"^{^\\^"a^\\^":1^}^"',
+      ),
+    ).toEqual({
+      resources: {
+        workspaces: [baseWorkspace()],
+        httpRequests: [
+          baseRequest({
+            url: "https://yaak.app",
+            method: "POST",
+            headers: [{ name: "Content-Type", value: "application/json", enabled: true }],
+            bodyType: "application/json",
+            body: { text: '{"a":1}' },
+          }),
+        ],
+      },
+    });
+  });
+
+  // A caret inside a single-quoted POSIX value is data, not an escape.
+  test("Keeps a caret in a POSIX command", () => {
+    expect(convertCurl("curl https://yaak.app -H 'X-Match: ^\"foo\"'")).toEqual({
+      resources: {
+        workspaces: [baseWorkspace()],
+        httpRequests: [
+          baseRequest({
+            url: "https://yaak.app",
+            headers: [{ name: "X-Match", value: '^"foo"', enabled: true }],
+          }),
+        ],
+      },
+    });
+  });
+
   test("Throws on malformed quotes", () => {
     expect(() => convertCurl('curl -X POST -F "a=aaa" -F b=bbb" https://yaak.app')).toThrow();
   });

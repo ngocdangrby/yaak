@@ -96,6 +96,68 @@ export const plugin: PluginDefinition = {
 };
 
 /**
+ * Does this look like a command copied from Chrome's "Copy as cURL (cmd)"?
+ *
+ * cmd.exe escapes with a caret instead of a backslash, so that format quotes
+ * every argument as `^"..."^` and ends each line with a bare `^` to continue
+ * it. Either marker on its own is not enough — a POSIX value can hold a caret
+ * too — so also require that no quote stands on its own: cmd escapes every
+ * one of them, while a POSIX command quotes its arguments with bare quotes.
+ */
+function isWindowsCmdCurl(rawData: string): boolean {
+  const hasCaretMarker = /\^"/.test(rawData) || /\^[ \t]*\r?\n/.test(rawData);
+  if (!hasCaretMarker) {
+    return false;
+  }
+
+  return !/(^|[^^])"/.test(rawData);
+}
+
+/**
+ * Rewrite cmd.exe caret escaping into the POSIX form the parser expects.
+ *
+ * In cmd.exe a caret escapes the single character after it, and a caret at the
+ * end of a line swallows the newline to continue the command. So `^"` is a
+ * quote, `^&` is a literal ampersand, `^^` is a literal caret, and `^\^"` —
+ * which Chrome emits for a quote inside a quoted argument — becomes `\"`,
+ * which shlex then reads as a literal quote.
+ */
+function unescapeWindowsCmd(rawData: string): string {
+  let out = "";
+
+  for (let i = 0; i < rawData.length; i++) {
+    const ch = rawData[i];
+
+    if (ch !== "^") {
+      out += ch;
+      continue;
+    }
+
+    const next = rawData[i + 1];
+
+    // A trailing caret has nothing to escape, so cmd drops it.
+    if (next === undefined) {
+      break;
+    }
+
+    // Line continuation: the caret and the newline both disappear.
+    if (next === "\n") {
+      i++;
+      continue;
+    }
+    if (next === "\r" && rawData[i + 2] === "\n") {
+      i += 2;
+      continue;
+    }
+
+    out += next;
+    i++;
+  }
+
+  return out;
+}
+
+/**
  * Splits raw input into individual shell command strings.
  * Handles line continuations, semicolons, and newline-separated curl commands.
  */
@@ -196,7 +258,9 @@ export function convertCurl(rawData: string) {
     return null;
   }
 
-  const commands: string[][] = splitCommands(rawData).map((cmd) => {
+  const data = isWindowsCmdCurl(rawData) ? unescapeWindowsCmd(rawData) : rawData;
+
+  const commands: string[][] = splitCommands(data).map((cmd) => {
     const tokens = split(cmd);
     return tokens.flatMap(expandShortFlags);
   });
